@@ -38,6 +38,20 @@ Not: Windows üzerinde tam GUI yetenekleri için `opencv-python` tercih edilebil
 
 ## Kullanım
 
+### Seçenek 1: Bağımsız çalıştırılabilir dosyayı kullanın (Windows)
+
+Windows'ta PCam-Client kullanmanın en kolay yolu önceden derlenmiş exe dosyasını indirmektir:
+
+1. `dist` klasöründen `PCam-Client.exe` dosyasını indirin
+2. (Opsiyonel) H.264 akışı kullanacaksanız, ffmpeg'i https://ffmpeg.org adresinden indirip PATH'e ekleyin
+3. Uygulamayı başlatmak için `PCam-Client.exe` dosyasına çift tıklayın
+4. GUI'de sunucu host ve port bilgilerini girin (varsayılan `127.0.0.1:8080`)
+5. Dönüş veya sanal kamera seçeneklerini gerektiği gibi açın
+
+**Not:** Exe dosyası yaklaşık 65MB boyutundadır çünkü Python ve tüm gerekli kütüphaneleri içerir. Python kurulumu gerekmez!
+
+### Seçenek 2: Python kaynak kodundan çalıştırın
+
 1. Kareleri gönderecek sunucuyu (cihaz veya streaming sunucusu) başlatın.
 2. İstemci GUI'yi çalıştırın:
 
@@ -47,7 +61,7 @@ python PCam-Client.py
 
 3. GUI'de sunucu host ve port bilgilerini girin (varsayılan `127.0.0.1:8080`), dönüş veya sanal kamera seçeneklerini gerektiği gibi açın.
 
-Klavye kısayolu:
+### Klavye kısayolları
 
 - `r` — Reset / yeniden bağlan
 
@@ -64,6 +78,24 @@ Klavye kısayolu:
 ## ADB yönlendirme (Android cihazlar)
 
 Eğer `adb` PATH üzerinde bulunuyorsa, istemci otomatik olarak `adb forward tcp:8080 tcp:8080` komutunu çalıştırmayı dener; bu USB üzerinden Android cihazdan akış almak için kullanışlıdır.
+
+## Exe dosyasını kendiniz derlemek
+
+Exe dosyasını kendiniz derlemek isterseniz:
+
+1. PyInstaller'ı yükleyin:
+```bash
+pip install pyinstaller
+```
+
+2. Exe dosyasını derleyin:
+```bash
+pyinstaller PCam-Client.spec --clean
+```
+
+3. Exe dosyası `dist` klasöründe oluşturulacaktır (yaklaşık 65MB)
+
+Derleme işlemi, tüm gerekli bağımlılıkları (tkinter, PIL, OpenCV, NumPy, vb.) içeren `PCam-Client.spec` dosyası ile yapılandırılmıştır.
 
 ## Katkıda bulunma
 
