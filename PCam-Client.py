@@ -391,7 +391,7 @@ class FrameReceiver(threading.Thread):
                                         ff.kill()
                                     except Exception:
                                         pass
-                                break
+                            break
 
                         # Not H.264: treat as the previous JPEG-style framing (with optional rotation header)
                         first_val = struct.unpack('>I', size_data)[0]
@@ -579,6 +579,9 @@ class PCamClientGUI:
         self.status_var = tk.StringVar(value='Idle')
 
         self.latest_frame = None
+        self.processed_preview_frame = None
+        self.processed_vcam_frame = None
+        self.frame_lock = threading.Lock()
         self.photoimage = None
         # rotation setting (degrees). Default 360 = no rotation
         self.rotate_var = tk.IntVar(value=360)
@@ -617,8 +620,8 @@ class PCamClientGUI:
             self._start_adb_forward()
         except Exception:
             pass
-        # start GUI update loop
-        self._update_preview()
+        # bind event-driven GUI update
+        root.bind('<<NewFrame>>', self._update_preview)
 
     def _build_ui(self):
         # main container with two columns
@@ -829,32 +832,14 @@ class PCamClientGUI:
         # loop and send frames
         try:
             while not self.vcam_stop_event.is_set():
-                frame = None
-                if self.latest_frame is not None:
-                    frame = self.latest_frame.copy()
-                else:
-                    # black frame
-                    frame = np.zeros((h, w, 3), dtype=np.uint8)
-
-                # ensure correct rotation/size
-                try:
-                    rot = int(self.rotate_var.get())
-                except Exception:
-                    rot = 360
-                if rot == 90:
-                    frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-                elif rot == 180:
-                    frame = cv2.rotate(frame, cv2.ROTATE_180)
-                elif rot == 270:
-                    frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
-
-                # resize to cam size if needed
-                try:
-                    frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                except Exception:
-                    frame_bgr = frame
-                if frame_bgr.shape[1] != cam.width or frame_bgr.shape[0] != cam.height:
-                    frame_bgr = cv2.resize(frame_bgr, (cam.width, cam.height))
+                with self.frame_lock:
+                    frame_bgr = getattr(self, 'processed_vcam_frame', None)
+                    
+                if frame_bgr is None:
+                    # check cam is initialized and use its width/height
+                    cw = cam.width if hasattr(cam, 'width') else w
+                    ch = cam.height if hasattr(cam, 'height') else h
+                    frame_bgr = np.zeros((ch, cw, 3), dtype=np.uint8)
 
                 try:
                     cam.send(frame_bgr)
@@ -899,8 +884,59 @@ class PCamClientGUI:
             self.start_receiver()
 
     def _on_frame(self, frame_rgb):
-        # frame_rgb: numpy array RGB
-        self.latest_frame = frame_rgb
+        if frame_rgb is None:
+            return
+
+        # 1. Apply base rotation
+        try:
+            rot = int(self.rotate_var.get())
+        except Exception:
+            rot = 360
+
+        try:
+            if rot == 90:
+                frame = cv2.rotate(frame_rgb, cv2.ROTATE_90_CLOCKWISE)
+            elif rot == 180:
+                frame = cv2.rotate(frame_rgb, cv2.ROTATE_180)
+            elif rot == 270:
+                frame = cv2.rotate(frame_rgb, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            else:
+                frame = frame_rgb
+        except Exception:
+            frame = frame_rgb
+
+        # 2. Pre-process for preview
+        preview_frame_to_store = frame
+        try:
+            w, h = self._get_preview_size()
+            if frame.shape[1] != w or frame.shape[0] != h:
+                preview_frame_to_store = cv2.resize(frame, (w, h))
+        except Exception:
+            pass
+
+        # 3. Pre-process for VCam (only if enabled and initialized)
+        vcam_bgr_to_store = None
+        vcam_enabled = False
+        try:
+            if getattr(self, 'vcam_enabled_var', None):
+                vcam_enabled = self.vcam_enabled_var.get()
+        except Exception:
+            pass
+
+        if vcam_enabled and getattr(self, 'vcam_cam', None):
+            try:
+                cam = self.vcam_cam
+                vcam_bgr_to_store = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                if vcam_bgr_to_store.shape[1] != cam.width or vcam_bgr_to_store.shape[0] != cam.height:
+                    vcam_bgr_to_store = cv2.resize(vcam_bgr_to_store, (cam.width, cam.height))
+            except Exception:
+                pass
+
+        with getattr(self, 'frame_lock', threading.Lock()):
+            self.latest_frame = frame_rgb
+            self.processed_preview_frame = preview_frame_to_store
+            self.processed_vcam_frame = vcam_bgr_to_store
+
         # log source size once for diagnosis
         try:
             if not getattr(self, '_source_logged', False):
@@ -911,10 +947,23 @@ class PCamClientGUI:
         except Exception:
             pass
 
+        # trigger event-driven UI update safely
+        if not getattr(self, 'preview_update_pending', False):
+            self.preview_update_pending = True
+            try:
+                self.root.event_generate('<<NewFrame>>', when='tail')
+            except Exception:
+                pass
+
     def _on_status(self, msg):
         # called from background threads; ensure thread-safe update
         def upd():
             self.status_var.set(msg)
+            # update placeholder if connection dropped or waiting
+            if any(k in msg.lower() for k in ('not found', 'connecting', 'lost', 'failed', 'error')):
+                with getattr(self, 'frame_lock', threading.Lock()):
+                    self.processed_preview_frame = None
+                self._set_preview_placeholder(msg)
         try:
             self.root.after(0, upd)
         except Exception:
@@ -934,41 +983,20 @@ class PCamClientGUI:
             # If debug logging fails, at least show the error
             print(f"[DEBUG ERROR] {e}: {msg}", file=sys.stderr, flush=True)
 
-    def _update_preview(self):
-        frame_to_send = None
-
-        if self.latest_frame is not None:
+    def _update_preview(self, event=None):
+        self.preview_update_pending = False
+        with getattr(self, 'frame_lock', threading.Lock()):
+            preview_frame = getattr(self, 'processed_preview_frame', None)
+            
+        if preview_frame is not None:
             try:
-                frame = self.latest_frame
-
-                # apply rotation if requested (90/180/270). 360 == no rotation
-                try:
-                    rot = int(self.rotate_var.get())
-                except Exception:
-                    rot = 360
-
-                if rot == 90:
-                    frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-                elif rot == 180:
-                    frame = cv2.rotate(frame, cv2.ROTATE_180)
-                elif rot == 270:
-                    frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
-
-                frame_to_send = frame
-
                 # update GUI preview
-                pil = Image.fromarray(frame)
-                w, h = self._get_preview_size()
-                pil = pil.resize((w, h))
+                pil = Image.fromarray(preview_frame)
                 self.photoimage = ImageTk.PhotoImage(pil)
                 self.preview_label.configure(image=self.photoimage)
 
             except Exception as e:
                 self._set_preview_placeholder('Decode Error')
-
-        # schedule next update
-        delay_ms = 30 # GUI'yi 30ms'de bir güncelle
-        self.root.after(delay_ms, self._update_preview)
 
     def on_close(self):
         self.stop_event.set()
