@@ -24,6 +24,30 @@ try:
 except Exception:
     VIRTUALCAM_AVAILABLE = False
 
+try:
+    from zeroconf import ServiceBrowser, Zeroconf
+except ImportError:
+    print("This script requires zeroconf. Install with: pip install zeroconf")
+    raise
+
+
+class PCamListener:
+    def __init__(self, callback):
+        self.callback = callback
+
+    def remove_service(self, zeroconf, type, name):
+        self.callback(name, None)
+
+    def add_service(self, zeroconf, type, name):
+        info = zeroconf.get_service_info(type, name)
+        if info:
+            addresses = info.parsed_addresses()
+            if addresses:
+                self.callback(name, addresses[0])
+
+    def update_service(self, zeroconf, type, name):
+        pass
+
 
 class FrameReceiver(threading.Thread):
     """Background thread that connects to a TCP server and receives JPEG-framed images.
@@ -168,13 +192,21 @@ class FrameReceiver(threading.Thread):
                                             
                                             data = ff.stdout.read(frame_size)
                                             
-                                            if not data or len(data) < frame_size:
+                                            if not data:
                                                 if self.debug_callback:
                                                     try:
-                                                        self.debug_callback(f'ff_reader: stdout closed or incomplete frame after {frame_count} frames (got {len(data) if data else 0} bytes)')
+                                                        self.debug_callback(f'ff_reader: stdout closed after {frame_count} frames')
                                                     except Exception:
                                                         pass
                                                 break
+                                                
+                                            if len(data) != frame_size:
+                                                if self.debug_callback:
+                                                    try:
+                                                        self.debug_callback(f'ff_reader: Frame dimension mismatch! Got {len(data)} bytes, expected {frame_size}. Dropping frame.')
+                                                    except Exception:
+                                                        pass
+                                                continue
                                             
                                             frame_count += 1
                                             fps_frame_count += 1
@@ -279,7 +311,8 @@ class FrameReceiver(threading.Thread):
                             # Now pump raw H.264 bytes from socket into ffmpeg.stdin
                             # Skip frames until we get the first keyframe (IDR with SPS/PPS)
                             waiting_for_keyframe = True
-                            pending_data = b''  # Accumulate data until we find keyframe
+                            pending_data = bytearray()  # Accumulate data efficiently until we find keyframe
+                            search_pos = 0  # Track position to avoid redundant searches
                             bytes_sent_to_ffmpeg = 0
                             # DEBUG: Save first 10KB to file for analysis
                             debug_file = None
@@ -305,31 +338,46 @@ class FrameReceiver(threading.Thread):
                                     
                                     # Wait for first keyframe (starts with 0x00 0x00 0x00 0x01 0x67 = SPS or 0x65 = IDR)
                                     if waiting_for_keyframe:
-                                        # Accumulate data
-                                        pending_data += chunk
-                                        # Look for SPS (0x67) or IDR (0x65) NAL unit
+                                        pending_data.extend(chunk)
+                                        # We only need to search from the previous search position,
+                                        # but we must step back 4 bytes in case the NAL boundary was split across chunks.
+                                        start_search = max(0, search_pos - 4)
                                         found_keyframe = False
-                                        for i in range(len(pending_data) - 4):
-                                            if pending_data[i:i+4] == b'\x00\x00\x00\x01':
-                                                nal_type = pending_data[i+4] & 0x1F
-                                                if nal_type == 7 or nal_type == 5:  # SPS or IDR
-                                                    found_keyframe = True
-                                                    if self.debug_callback:
-                                                        try:
-                                                            nal_name = 'SPS' if nal_type == 7 else 'IDR'
-                                                            self.debug_callback(f'Found first keyframe: {nal_name} at offset {i}, buffered {len(pending_data)} bytes total')
-                                                        except Exception:
-                                                            pass
-                                                    # Start from this position
-                                                    chunk = pending_data[i:]
-                                                    pending_data = b''
-                                                    waiting_for_keyframe = False
-                                                    break
+                                        
+                                        while True:
+                                            idx = pending_data.find(b'\x00\x00\x00\x01', start_search)
+                                            if idx == -1 or idx + 4 >= len(pending_data):
+                                                # Save the length so next time we resume from here
+                                                search_pos = len(pending_data)
+                                                break
+                                            
+                                            nal_type = pending_data[idx+4] & 0x1F
+                                            if nal_type == 7 or nal_type == 5:
+                                                found_keyframe = True
+                                                if self.debug_callback:
+                                                    try:
+                                                        nal_name = 'SPS' if nal_type == 7 else 'IDR'
+                                                        self.debug_callback(f'Found first keyframe: {nal_name} at offset {idx}, buffered {len(pending_data)} bytes total')
+                                                    except Exception:
+                                                        pass
+                                                # Start from this position, convert back to bytes for ffmpeg
+                                                chunk = bytes(pending_data[idx:])
+                                                # Free the bytearray
+                                                pending_data = None
+                                                waiting_for_keyframe = False
+                                                break
+                                                
+                                            # Resume search after this NAL unit marker
+                                            start_search = idx + 4
+
                                         if waiting_for_keyframe:
-                                            # Still waiting, continue accumulating
-                                            # Keep last 10MB max to avoid memory issues
-                                            if len(pending_data) > 10 * 1024 * 1024:
-                                                pending_data = pending_data[-1024*1024:]
+                                            # Strict memory limit: 5MB
+                                            if len(pending_data) > 5 * 1024 * 1024:
+                                                # Keep last 1MB safely in-place
+                                                keep_size = 1024 * 1024
+                                                del pending_data[:-keep_size]
+                                                # Reset search pos securely inside bounds
+                                                search_pos = max(0, len(pending_data) - 4)
                                             continue
                                     
                                     # DEBUG: Save first chunks
@@ -376,21 +424,31 @@ class FrameReceiver(threading.Thread):
                                         debug_file.close()
                                     except Exception:
                                         pass
-                                try:
-                                    ff.stdin.close()
-                                except Exception:
-                                    pass
-                                # Wait for reader thread to finish
-                                rt.join(timeout=1.0)
-                                # Terminate ffmpeg if still running
+                                        
+                                # 1. Defensive Subprocess Termination
                                 try:
                                     ff.terminate()
                                     ff.wait(timeout=1.0)
                                 except Exception:
-                                    try:
+                                    pass
+                                try:
+                                    if ff.poll() is None:
                                         ff.kill()
-                                    except Exception:
-                                        pass
+                                except Exception:
+                                    pass
+                                    
+                                # 2. Unblock and Join Companion Threads
+                                for pipe in (ff.stdin, ff.stdout, ff.stderr):
+                                    if pipe:
+                                        try:
+                                            pipe.close()
+                                        except Exception:
+                                            pass
+                                            
+                                if 'rt' in locals() and rt.is_alive():
+                                    rt.join(timeout=1.0)
+                                if 'st' in locals() and st.is_alive():
+                                    st.join(timeout=1.0)
                             break
 
                         # Not H.264: treat as the previous JPEG-style framing (with optional rotation header)
@@ -613,13 +671,14 @@ class PCamClientGUI:
         root.bind('<r>', lambda e: self.on_reset())
         root.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        # start receiver thread immediately
-        self.start_receiver()
-        # attempt to start adb port forwarding if adb is available
-        try:
-            self._start_adb_forward()
-        except Exception:
-            pass
+        # Zero Config / Auto-Discovery
+        self.discovered_ips = {}
+        self.zeroconf = None
+        self.browser = None
+        self._start_zeroconf()
+
+        # Auto-connect smartly on startup
+        self.connect_smartly()
         # bind event-driven GUI update
         root.bind('<<NewFrame>>', self._update_preview)
 
@@ -670,12 +729,18 @@ class PCamClientGUI:
         for val, lbl in ((90, '90'), (180, '180'), (270, '270'), (360, '360')):
             ttk.Radiobutton(rot_frame, text=lbl, variable=self.rotate_var, value=val).pack(side=tk.LEFT, padx=2)
 
+        # Remote Control buttons
+        ctrl_frame = ttk.Frame(left_bottom)
+        ctrl_frame.grid(row=1, column=0, columnspan=2, sticky=tk.W, padx=6, pady=(0,6))
+        ttk.Button(ctrl_frame, text='Toggle Flash', command=lambda: self._send_cmd('CMD:FLASH_TOGGLE')).pack(side=tk.LEFT, padx=(0,4))
+        ttk.Button(ctrl_frame, text='Switch Camera', command=lambda: self._send_cmd('CMD:CAM_SWITCH')).pack(side=tk.LEFT)
+
         # optional debug checkbox below settings
         self.debug_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(left_bottom, text='Show debug logs', variable=self.debug_var).grid(row=1, column=0, columnspan=2, sticky=tk.W, padx=6, pady=(0,6))
+        ttk.Checkbutton(left_bottom, text='Show debug logs', variable=self.debug_var).grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=6, pady=(0,6))
 
         # virtual cam checkbox
-        vcam_row = 2
+        vcam_row = 3
         if VIRTUALCAM_AVAILABLE:
             ttk.Checkbutton(left_bottom, text='Send to virtual camera', variable=self.vcam_enabled_var, command=self._on_vcam_toggle).grid(row=vcam_row, column=0, columnspan=2, sticky=tk.W, padx=6, pady=(2,6))
             # small controls to choose virtual camera resolution
@@ -868,9 +933,53 @@ class PCamClientGUI:
         # also stop vcam if running
         self._stop_vcam_thread()
 
-    def on_connect(self):
-        # update host/port and restart receiver
+    def connect_smartly(self):
+        # 1. Priority 1: ADB Forward
+        if self._start_adb_forward():
+            self.host_var.set('127.0.0.1')
+            self._on_status('Connecting via USB (ADB)...')
+            self.start_receiver()
+            return
+
+        # 2. Priority 2: mDNS Discovered IP
+        if getattr(self, 'discovered_ips', None):
+            ip = list(self.discovered_ips.values())[0]
+            self.host_var.set(ip)
+            self._on_status('Connecting via Wi-Fi (mDNS)...')
+            self.start_receiver()
+            return
+            
+        # 3. Fallback: manual IP entered by user
+        self._on_status('Connecting via Manual IP...')
         self.start_receiver()
+
+    def on_connect(self):
+        # manual connect triggers smart connect
+        self.connect_smartly()
+
+    def _start_zeroconf(self):
+        try:
+            self.zeroconf = Zeroconf()
+            listener = PCamListener(self._on_mdns_discovered)
+            self.browser = ServiceBrowser(self.zeroconf, "_pcam._tcp.local.", listener)
+        except Exception as e:
+            print(f"Zeroconf init error: {e}", file=sys.stderr)
+
+    def _on_mdns_discovered(self, name, ip):
+        def upd():
+            if ip:
+                self.discovered_ips[name] = ip
+                self._debug_log(f"mDNS Discovered: {name} at {ip}")
+                # Auto-connect if currently waiting for a device
+                if self.status_var.get() in ('Idle', 'Device not Found'):
+                    self.connect_smartly()
+            else:
+                self.discovered_ips.pop(name, None)
+                self._debug_log(f"mDNS Removed: {name}")
+        try:
+            self.root.after(0, upd)
+        except Exception:
+            pass
 
     def on_reset(self):
         # emulate pressing 'r' -> request reconnect
@@ -882,6 +991,18 @@ class PCamClientGUI:
         else:
             # start a new receiver
             self.start_receiver()
+
+    def _send_cmd(self, cmd_string):
+        threading.Thread(target=self._send_cmd_worker, args=(cmd_string,), daemon=True).start()
+
+    def _send_cmd_worker(self, cmd_string):
+        host = self.host_var.get()
+        try:
+            with socket.create_connection((host, 8081), timeout=2.0) as sock:
+                sock.sendall(f"{cmd_string}\n".encode())
+            self._debug_log(f"Sent control command: {cmd_string}")
+        except Exception as e:
+            self._debug_log(f"Failed to send command {cmd_string}: {e}")
 
     def _on_frame(self, frame_rgb):
         if frame_rgb is None:
@@ -958,12 +1079,21 @@ class PCamClientGUI:
     def _on_status(self, msg):
         # called from background threads; ensure thread-safe update
         def upd():
-            self.status_var.set(msg)
+            local_msg = msg
+            # Enrich 'Connected' status based on active mode
+            if local_msg == "Connected":
+                host = self.host_var.get()
+                if host == '127.0.0.1':
+                    local_msg = "Connected via USB (ADB)"
+                elif hasattr(self, 'discovered_ips') and host in self.discovered_ips.values():
+                    local_msg = "Connected via Wi-Fi (mDNS)"
+            
+            self.status_var.set(local_msg)
             # update placeholder if connection dropped or waiting
-            if any(k in msg.lower() for k in ('not found', 'connecting', 'lost', 'failed', 'error')):
+            if any(k in local_msg.lower() for k in ('not found', 'connecting', 'lost', 'failed', 'error')):
                 with getattr(self, 'frame_lock', threading.Lock()):
                     self.processed_preview_frame = None
-                self._set_preview_placeholder(msg)
+                self._set_preview_placeholder(local_msg)
         try:
             self.root.after(0, upd)
         except Exception:
@@ -1011,6 +1141,14 @@ class PCamClientGUI:
             self._stop_adb_forward()
         except Exception:
             pass
+            
+        # teardown zeroconf
+        if getattr(self, 'zeroconf', None):
+            try:
+                self.zeroconf.close()
+            except Exception:
+                pass
+                
         self.root.destroy()
 
     # --- ADB forward helpers -------------------------------------------------
@@ -1029,6 +1167,8 @@ class PCamClientGUI:
             res = subprocess.run([adb_path, 'forward', 'tcp:8080', 'tcp:8080'], capture_output=True, text=True)
             if res.returncode == 0:
                 self._adb_forwarded = True
+                # also forward 8081 for control channel
+                subprocess.run([adb_path, 'forward', 'tcp:8081', 'tcp:8081'], capture_output=True, text=True)
                 self._on_status('ADB forward started')
                 return True
             else:
@@ -1052,6 +1192,7 @@ class PCamClientGUI:
             return False
         try:
             res = subprocess.run([adb_path, 'forward', '--remove', 'tcp:8080'], capture_output=True, text=True)
+            subprocess.run([adb_path, 'forward', '--remove', 'tcp:8081'], capture_output=True, text=True)
             if res.returncode == 0:
                 self._adb_forwarded = False
                 self._on_status('ADB forward removed')
