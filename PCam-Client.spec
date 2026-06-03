@@ -5,7 +5,7 @@ a = Analysis(
     ['PCam-Client.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('Images', 'Images')],
     hiddenimports=['zeroconf', 'pyvirtualcam'],
     hookspath=[],
     hooksconfig={},
@@ -35,5 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='NONE',
+    icon='Images\\PCam_logo.ico',
 )

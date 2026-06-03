@@ -642,11 +642,11 @@ class PCamClientGUI:
         icon_path_ico = os.path.join(base_path, 'Images', 'PCam_logo.ico')
 
         try:
-            if os.path.exists(icon_path_ico):
-                root.iconbitmap(icon_path_ico)
-            elif os.path.exists(icon_path_png):
+            if os.path.exists(icon_path_png):
                 self.icon_img = tk.PhotoImage(file=icon_path_png)
                 root.iconphoto(False, self.icon_img)
+            elif os.path.exists(icon_path_ico):
+                root.iconbitmap(icon_path_ico)
         except Exception:
             pass
 
