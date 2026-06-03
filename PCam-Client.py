@@ -631,6 +631,25 @@ class PCamClientGUI:
         self.root = root
         root.title('PCam Client')
 
+        import sys
+        import os
+        if hasattr(sys, '_MEIPASS'):
+            base_path = sys._MEIPASS
+        else:
+            base_path = os.path.abspath(".")
+            
+        icon_path_png = os.path.join(base_path, 'Images', 'PCam_logo.png')
+        icon_path_ico = os.path.join(base_path, 'Images', 'PCam_logo.ico')
+
+        try:
+            if os.path.exists(icon_path_ico):
+                root.iconbitmap(icon_path_ico)
+            elif os.path.exists(icon_path_png):
+                self.icon_img = tk.PhotoImage(file=icon_path_png)
+                root.iconphoto(False, self.icon_img)
+        except Exception:
+            pass
+
         # top-level control vars
         self.host_var = tk.StringVar(value='127.0.0.1')
         self.port_var = tk.StringVar(value='8080')
