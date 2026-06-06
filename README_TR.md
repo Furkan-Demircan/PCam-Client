@@ -1,106 +1,296 @@
-# PCam-Client (Türkçe Çeviri)
+# 📷 PCam - Uzak Kamera Sistemi
 
-PCam-Client, TCP sunucusundan canlı kamera kareleri alan ve yerel olarak önizleyen hafif bir Python GUI uygulamasıdır. İki çerçeveleme modu destekler: basit JPEG çerçeveli görüntüler ve ffmpeg ile çözümlenen H.264 akışı. İsteğe bağlı olarak, gelen kareler bir sanal kameraya (pyvirtualcam yüklüyse) gönderilebilir; böylece OBS, Zoom gibi uygulamalar bu akışı web kamerası kaynağı olarak kullanabilir.
+PCam, Android akıllı telefonunuzu bilgisayarınız için yüksek çözünürlüklü ve ultra düşük gecikmeli bir web kameraya dönüştüren taşınabilir ve tak-çalıştır bir uzak kamera uygulamasıdır.
 
-## Temel özellikler
+Donanım hızlandırmalı H.264 video akışı sayesinde PCam; Zoom, Discord, Microsoft Teams, Skype, OBS Studio ve diğer görüntülü görüşme veya yayın platformlarına sorunsuz şekilde görüntü aktarabilir.
 
-- TCP üzerinden kare alma için basit ve güvenilir bir protokol.
-- JPEG çerçeveli görüntüler (4 bayt uzunluk başlığı) ve H.264 akışı desteği (ffmpeg ile decode).
-- Gönderenin gönderdiği dönüş (rotation) bilgisini işleyerek önizlemede ve sanal kamerada uygular.
-- `pyvirtualcam` ile isteğe bağlı sanal kamera çıktısı.
-- Bağlantı ve decode sorunlarının tanılanması için temel durum ve debug günlükleri.
+Sistem iki ana bileşenden oluşur:
 
-## Protokol özeti
+* **PCam Masaüstü İstemcisi** (Python / Tkinter)
+* **PCam Mobil Yayıncı** (Android / Jetpack Compose / MediaCodec)
 
-- JPEG çerçeveleme: 4 bayt büyük uçlu (big-endian) unsigned int uzunluk, ardından JPEG baytları. Gönderen, uzunluk yerine (0/90/180/270/360) döndürme değeri gönderebilir; bu durumda ardından 4 bayt uzunluk ve JPEG baytları gelir.
-- H.264 akışı: sunucu ASCII `H264` başlığı gönderebilir, ardından genişlik, yükseklik ve fps olmak üzere üç 4 bayt büyük uçlu tamsayı gelir. İstemci bu durumda `ffmpeg` başlatarak ham RGB kareleri çözer.
+---
 
-## Gereksinimler
+## ✨ Özellikler
 
-- Python 3.8+
-- Pillow (PIL)
-- OpenCV (cv2)
-- NumPy
-- ffmpeg — yalnızca H.264 modu kullanılıyorsa gerekir ve PATH içinde bulunmalıdır
-- pyvirtualcam — yalnızca sanal kamera kullanmak isterseniz
+### 🚀 Kurulumsuz ve Taşınabilir
 
-Python bağımlılıklarını yüklemek için:
+Masaüstü istemcisi tek bir çalıştırılabilir dosya olarak dağıtılır.
 
-```bash
-pip install pillow opencv-python-headless numpy
-# İsteğe bağlı
-pip install pyvirtualcam
+Kullanıcıların aşağıdakileri ayrıca kurmasına gerek yoktur:
+
+* Python
+* FFmpeg
+* ADB
+
+Gerekli tüm bileşenler paket içerisinde hazır olarak gelir.
+
+### ⚡ Düşük Gecikmeli H.264 Altyapısı
+
+* Donanım hızlandırmalı H.264 kodlama
+* Optimize edilmiş görüntü aktarımı
+* Düşük gecikme süresi
+* Kararlı video yayını
+
+### 🔗 Çift Bağlantı Desteği
+
+#### Wi-Fi Modu
+
+* mDNS ile otomatik cihaz keşfi
+* Manuel IP girişi gerektirmez
+* Tek tıkla bağlantı
+
+#### USB Modu
+
+* Otomatik ADB tünelleme
+* Maksimum kararlılık
+* En düşük gecikme süresi
+* Yayın ve içerik üretimi için ideal
+
+### 🔄 Uzaktan Kamera Kontrolü
+
+Telefon kamerasını doğrudan masaüstü uygulamasından kontrol edebilirsiniz:
+
+* Ön / arka kamera geçişi
+* Flaş açma / kapatma
+* Görüntü döndürme
+
+### 🎭 Sanal Kamera Entegrasyonu
+
+PCam, görüntüyü OBS Virtual Camera üzerinden aktararak telefonunuzu sistem tarafından tanınan bir web kamera haline getirir.
+
+Desteklenen uygulamalar:
+
+* Zoom
+* Discord
+* Microsoft Teams
+* Skype
+* Google Meet
+* DirectShow destekleyen tüm uygulamalar
+
+---
+
+## 📦 Yayın Paketi Yapısı
+
+Sıkıştırılmış dosya açıldığında aşağıdaki klasör yapısı oluşur:
+
+```text
+PCam/
+│
+├── PCam.exe
+│
+├── Binaries/
+│   ├── ffmpeg.exe
+│   ├── adb.exe
+│   ├── AdbWinApi.dll
+│   └── AdbWinUsbApi.dll
+│
+└── Images/
+    └── PCam_logo.png
 ```
 
-ffmpeg'i işletim sisteminizin paket yöneticisiyle yükleyin veya https://ffmpeg.org adresinden indirip `ffmpeg`'i PATH'e ekleyin.
+### Dahil Edilen Bileşenler
 
-Not: Windows üzerinde tam GUI yetenekleri için `opencv-python` tercih edilebilir.
+| Dosya            | Açıklama                   |
+| ---------------- | -------------------------- |
+| PCam.exe         | Ana masaüstü uygulaması    |
+| ffmpeg.exe       | Dahili H.264 çözücü        |
+| adb.exe          | Dahili Android USB köprüsü |
+| AdbWinApi.dll    | ADB bağımlılığı            |
+| AdbWinUsbApi.dll | ADB bağımlılığı            |
+| PCam_logo.png    | Uygulama logosu            |
 
-## Kullanım
+---
 
-### Seçenek 1: Bağımsız çalıştırılabilir dosyayı kullanın (Windows)
+## 📱 Mobil Uygulamanın Kurulumu
 
-Windows'ta PCam-Client kullanmanın en kolay yolu önceden derlenmiş exe dosyasını indirmektir:
+1. `PCam-MobileApp.apk` dosyasını Android cihazınıza aktarın.
+2. APK dosyasını kurun.
+3. Gerekirse "Bilinmeyen Kaynaklardan Yükleme" izni verin.
+4. Uygulamayı açın.
+5. Kamera izinlerini onaylayın.
 
-1. `dist` klasöründen `PCam-Client.exe` dosyasını indirin
-2. (Opsiyonel) H.264 akışı kullanacaksanız, ffmpeg'i https://ffmpeg.org adresinden indirip PATH'e ekleyin
-3. Uygulamayı başlatmak için `PCam-Client.exe` dosyasına çift tıklayın
-4. GUI'de sunucu host ve port bilgilerini girin (varsayılan `127.0.0.1:8080`)
-5. Dönüş veya sanal kamera seçeneklerini gerektiği gibi açın
+---
 
-**Not:** Exe dosyası yaklaşık 65MB boyutundadır çünkü Python ve tüm gerekli kütüphaneleri içerir. Python kurulumu gerekmez!
+## 🔌 Cihaz Bağlantısı
 
-### Seçenek 2: Python kaynak kodundan çalıştırın
+### Seçenek A — Wi-Fi Bağlantısı
 
-1. Kareleri gönderecek sunucuyu (cihaz veya streaming sunucusu) başlatın.
-2. İstemci GUI'yi çalıştırın:
+1. Telefon ve bilgisayarın aynı ağa bağlı olduğundan emin olun.
+2. `PCam.exe` uygulamasını çalıştırın.
+3. Durum göstergesinde aşağıdaki mesajı bekleyin:
+
+```text
+Cihazlar aranıyor...
+```
+
+4. Android uygulamasında yayın başlat düğmesine basın.
+5. PCam cihazı mDNS üzerinden otomatik olarak bulacaktır.
+6. Bağlantı kurulduğunda durum şu şekilde değişir:
+
+```text
+Bağlandı [Wi-Fi]
+```
+
+---
+
+### Seçenek B — USB Bağlantısı (Önerilen)
+
+1. Android cihazınızda **Geliştirici Seçenekleri**ni etkinleştirin.
+2. **USB Hata Ayıklama** özelliğini açın.
+3. Telefonu USB kablosu ile bilgisayara bağlayın.
+4. Telefonda çıkan yetkilendirme penceresini onaylayın.
+5. `PCam.exe` uygulamasını çalıştırın.
+
+PCam otomatik olarak:
+
+* Cihazı algılar
+* ADB tünelini oluşturur
+* Video aktarımını başlatır
+
+Durum göstergesi:
+
+```text
+Bağlandı [USB]
+```
+
+---
+
+## 🎭 Zoom, Discord ve Teams ile Kullanım
+
+### OBS Studio Kurulumu
+
+Bilgisayarınızda OBS Studio kurulu değilse yükleyin.
+
+OBS, gerekli sanal kamera sürücülerini otomatik olarak kuracaktır.
+
+### PCam'i Başlatın
+
+1. Telefonu bağlayın.
+2. Önizleme görüntüsünün geldiğini doğrulayın.
+
+### Sanal Kamera Çıkışını Etkinleştirin
+
+Ayarlar bölümündeki:
+
+```text
+Sanal Kameraya Gönder
+```
+
+seçeneğini aktif edin.
+
+### OBS Virtual Camera'yı Seçin
+
+Kullandığınız toplantı veya yayın uygulamasında:
+
+1. Video ayarlarını açın.
+2. Kamera olarak:
+
+```text
+OBS Virtual Camera
+```
+
+seçeneğini seçin.
+
+Artık telefon kamerası sistem tarafından normal bir web kamera olarak kullanılacaktır.
+
+---
+
+## ⚙️ Sorun Giderme
+
+### Yeşil Ekran veya Bozuk Görüntü
+
+Kablosuz bağlantının kararsız olduğu durumlarda ilk H.264 ana kare (keyframe) parçalanmış şekilde gelebilir.
+
+Eğer görüntü yeşil veya bozuk görünüyorsa:
+
+1. Bir kez **Kamera Değiştir** düğmesine basın.
+2. Android cihaz yeni bir ana kare oluşturacaktır.
+3. Görüntü normale dönecektir.
+
+---
+
+### Geçici Bağlantı Kopmaları
+
+PCam, bağlantının hemen kesilmesini önlemek için **4 saniyelik akıllı zaman aşımı mekanizması** kullanır.
+
+Kısa süreli paket kayıplarında yayın sonlandırılmaz.
+
+Maksimum kararlılık için USB modu önerilir.
+
+---
+
+### Windows Defender Uyarısı
+
+PCam, PyInstaller kullanılarak tek bir çalıştırılabilir dosya halinde paketlendiği ve ticari bir dijital imza sertifikasına sahip olmadığı için Windows aşağıdaki uyarıyı gösterebilir:
+
+```text
+Windows bilgisayarınızı korudu
+```
+
+Bu durum bağımsız geliştiriciler tarafından dağıtılan uygulamalarda yaygın olarak görülen bir yanlış pozitif durumdur.
+
+PCam:
+
+* Açık kaynaklıdır
+* Zararlı yazılım içermez
+* Arka planda servis kurmaz
+* Kapatıldığında tüm işlemleri temizler
+
+---
+
+## 👨‍💻 Yerel Geliştirme
+
+### Gereksinimler
+
+* Python 3.10+
+* FFmpeg
+* Android SDK Platform Tools (isteğe bağlı)
+
+### Bağımlılıkları Kurma
+
+```bash
+pip install pillow opencv-python numpy zeroconf pyvirtualcam
+```
+
+### Masaüstü İstemcisini Çalıştırma
 
 ```bash
 python PCam-Client.py
 ```
 
-3. GUI'de sunucu host ve port bilgilerini girin (varsayılan `127.0.0.1:8080`), dönüş veya sanal kamera seçeneklerini gerektiği gibi açın.
+---
 
-### Klavye kısayolları
+## 📦 Derleme
 
-- `r` — Reset / yeniden bağlan
+PyInstaller kurulumu:
 
-## Sanal kamera
-
-`pyvirtualcam` yüklüyse, "Send to virtual camera" seçeneğini etkinleştirerek gelen kareleri sistem sanal kamerası olarak yayınlayabilirsiniz. Sanal kamera başlamadan önce çözünürlük ve FPS değerlerini UI'den ayarlayın.
-
-## Sorun Giderme
-
-- İstemci "Device not Found" gösteriyorsa, sunucunun çalıştığından ve belirtilen host/port'tan erişilebilir olduğundan emin olun.
-- H.264 akışı kullanıyorsanız `ffmpeg`'in PATH üzerinde olduğundan emin olun. İstemci eksik ffmpeg durumunda durumu bildirir.
-- Daha detaylı konsol çıktısı için UI'de "Show debug logs" seçeneğini etkinleştirin.
-
-## ADB yönlendirme (Android cihazlar)
-
-Eğer `adb` PATH üzerinde bulunuyorsa, istemci otomatik olarak `adb forward tcp:8080 tcp:8080` komutunu çalıştırmayı dener; bu USB üzerinden Android cihazdan akış almak için kullanışlıdır.
-
-## Exe dosyasını kendiniz derlemek
-
-Exe dosyasını kendiniz derlemek isterseniz:
-
-1. PyInstaller'ı yükleyin:
 ```bash
 pip install pyinstaller
 ```
 
-2. Exe dosyasını derleyin:
+Çalıştırılabilir dosya oluşturma:
+
 ```bash
 pyinstaller PCam-Client.spec --clean
 ```
 
-3. Exe dosyası `dist` klasöründe oluşturulacaktır (yaklaşık 65MB)
+---
 
-Derleme işlemi, tüm gerekli bağımlılıkları (tkinter, PIL, OpenCV, NumPy, vb.) içeren `PCam-Client.spec` dosyası ile yapılandırılmıştır.
+## 💡 Mimari Notları
 
-## Katkıda bulunma
+PCam kaynak kullanımını minimum seviyede tutacak şekilde tasarlanmıştır.
 
-Küçük düzeltmeler memnuniyetle kabul edilir. Lütfen kısa bir açıklama ile issue veya pull request açın.
+Temel tasarım prensipleri:
 
-## Diller
+* Asenkron ağ iletişimi
+* Donanım hızlandırmalı video kodlama
+* Minimum bellek kullanımı
+* Hafif masaüstü arayüzü
+* Olay tabanlı mimari
 
-Bu dosya README dosyasının Türkçe çevirisidir. Orijinal İngilizce sürüm: [README.md](README.md)
+Bu sayede hem mobil cihazda hem de bilgisayarda düşük işlemci kullanımıyla düşük gecikmeli video aktarımı sağlanır.
+
+📄 Lisans
+
+Bu proje, MIT Lisansı ile lisanslanmıştır - detaylar için LICENSE dosyasına bakınız.

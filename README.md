@@ -49,16 +49,6 @@ Everything required is bundled inside the release package.
 * Lowest possible latency
 * Ideal for streaming and content creation
 
-### 📺 Fixed 16:9 Preview
-
-The desktop preview always maintains a **16:9 aspect ratio (640×360)**.
-
-When the phone is rotated into portrait orientation:
-
-* The image is automatically scaled
-* Black pillarboxes are added
-* UI distortion is prevented
-
 ### 🔄 Remote Camera Controls
 
 Control your smartphone directly from the desktop application:
@@ -298,3 +288,7 @@ Core design principles:
 * Event-driven architecture
 
 This allows PCam to deliver low-latency video streaming while maintaining low CPU and memory usage on both desktop and mobile devices.
+
+📄 License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
