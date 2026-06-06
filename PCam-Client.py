@@ -98,8 +98,9 @@ class FrameReceiver(threading.Thread):
                 except Exception:
                     # Not critical; continue without failing
                     pass
-                # Connected
-                self.sock.settimeout(1.0)
+                # Connected – use a longer timeout for active streaming to tolerate
+                # Wi-Fi latency spikes without falsely triggering reconnect status.
+                self.sock.settimeout(4.0)
                 self.status_callback("Connected")
                 if self.debug_callback:
                     try:
@@ -357,14 +358,19 @@ class FrameReceiver(threading.Thread):
                                                 if self.debug_callback:
                                                     try:
                                                         nal_name = 'SPS' if nal_type == 7 else 'IDR'
-                                                        self.debug_callback(f'Found first keyframe: {nal_name} at offset {idx}, buffered {len(pending_data)} bytes total')
+                                                        junk_bytes = idx
+                                                        self.debug_callback(f'Found first keyframe: {nal_name} at offset {idx}, flushing {junk_bytes} junk bytes, buffered {len(pending_data)} bytes total')
                                                     except Exception:
                                                         pass
-                                                # Start from this position, convert back to bytes for ffmpeg
-                                                chunk = bytes(pending_data[idx:])
-                                                # Free the bytearray
+                                                # Extract only the clean bitstream starting from the keyframe NAL.
+                                                # All bytes before idx are pre-keyframe junk and must be discarded
+                                                # to prevent ffmpeg from decoding corrupted/green initial frames.
+                                                clean_start = bytes(pending_data[idx:])
+                                                # Fully release the accumulation buffer
+                                                del pending_data
                                                 pending_data = None
                                                 waiting_for_keyframe = False
+                                                chunk = clean_start
                                                 break
                                                 
                                             # Resume search after this NAL unit marker
