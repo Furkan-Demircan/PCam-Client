@@ -1,5 +1,11 @@
 ﻿<p align="center"> <img src="Images/PCam_logo.png" alt="PCam Logo" width="160"> </p> <h1 align="center">📷 PCam</h1> <p align="center"> Turn your Android device into a low-latency webcam for your PC. </p> <p align="center"> <img src="https://img.shields.io/badge/version-v1.0.0-blue.svg" alt="Version"> <img src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6.svg" alt="Windows"> <img src="https://img.shields.io/badge/android-8.0%2B-3DDC84.svg" alt="Android"> <img src="https://img.shields.io/badge/video-H.264-orange.svg" alt="H264"> <img src="https://img.shields.io/badge/connection-Wi--Fi%20%7C%20USB-success.svg" alt="Connection"> <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License"> </p> <p align="center"> <a href="https://github.com/Furkan-Demircan/PCam-Client/releases"> <img src="https://img.shields.io/github/v/release/Furkan-Demircan/PCam-Client?label=Latest%20Release" alt="Release"> </a> <a href="https://github.com/Furkan-Demircan/PCam-Client/releases/latest"> <img src="https://img.shields.io/github/downloads/Furkan-Demircan/PCam-Client/total?label=Downloads" alt="Downloads"> </a> <a href="https://github.com/Furkan-Demircan/PCam-Client/stargazers"> <img src="https://img.shields.io/github/stars/Furkan-Demircan/PCam-Client?style=social" alt="Stars"> </a> </p>
 
+![Android](https://img.shields.io/badge/Android-8.0+-3DDC84?logo=android)
+![Python](https://img.shields.io/badge/Desktop-Python-3776AB?logo=python)
+![Jetpack Compose](https://img.shields.io/badge/Mobile-Jetpack%20Compose-4285F4)
+![OBS](https://img.shields.io/badge/OBS-Virtual%20Camera-302E31?logo=obsstudio)
+![License](https://img.shields.io/badge/License-MIT-green)
+
 # 📷 PCam - Remote Camera System
 
 PCam is a portable, plug-and-play remote camera application that transforms your Android smartphone into a high-definition, ultra-low latency webcam for your PC.
