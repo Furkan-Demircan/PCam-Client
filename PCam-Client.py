@@ -7,6 +7,35 @@ import cv2
 import numpy as np
 import subprocess
 import shutil
+import os
+
+# Windows-only: prevent subprocess from flashing a console window
+_SUBPROCESS_FLAGS = 0
+if sys.platform == 'win32':
+    _SUBPROCESS_FLAGS = subprocess.CREATE_NO_WINDOW  # 0x08000000
+
+
+def get_binary_path(binary_name):
+    """Resolve the absolute path to a bundled binary (ffmpeg, adb, etc.).
+
+    Resolution order:
+      1. PyInstaller temp folder: sys._MEIPASS/Binaries/<binary_name>
+      2. Local dev folder:        ./Binaries/<binary_name>
+      3. System PATH fallback:    shutil.which(<binary_name>)
+    Returns the absolute path string, or None if not found anywhere.
+    """
+    # 1. PyInstaller bundle
+    if hasattr(sys, '_MEIPASS'):
+        p = os.path.join(sys._MEIPASS, 'Binaries', binary_name)
+        if os.path.isfile(p):
+            return p
+    # 2. Local project Binaries folder (relative to script location)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    p = os.path.join(script_dir, 'Binaries', binary_name)
+    if os.path.isfile(p):
+        return p
+    # 3. System PATH
+    return shutil.which(binary_name)
 
 try:
     import tkinter as tk
@@ -72,7 +101,7 @@ class FrameReceiver(threading.Thread):
     def run(self):
         while not self.stop_event.is_set():
             # Wait for either reconnect_event or immediate attempt
-            self.status_callback("Connecting...")
+            self.status_callback("Searching for devices...")
             if self.debug_callback:
                 try:
                     self.debug_callback(f"Attempting connect to {self.host}:{self.port}")
@@ -102,6 +131,12 @@ class FrameReceiver(threading.Thread):
                 # Wi-Fi latency spikes without falsely triggering reconnect status.
                 self.sock.settimeout(4.0)
                 self.status_callback("Connected")
+                # reset source-logged flag so the first frame logs source info again
+                try:
+                    if hasattr(self, '_gui_ref') and self._gui_ref:
+                        self._gui_ref._source_logged = False
+                except Exception:
+                    pass
                 if self.debug_callback:
                     try:
                         self.debug_callback("Socket connected")
@@ -148,12 +183,13 @@ class FrameReceiver(threading.Thread):
                                 except Exception:
                                     pass
                             # spawn ffmpeg to decode H.264 from stdin and emit raw RGB frames on stdout
-                            if shutil.which('ffmpeg') is None:
-                                self.status_callback('ffmpeg not found (required for H.264 decode)')
+                            ffmpeg_path = get_binary_path('ffmpeg.exe' if sys.platform == 'win32' else 'ffmpeg')
+                            if ffmpeg_path is None:
+                                self.status_callback('Error: FFmpeg not found. Retrying...')
                                 raise ConnectionResetError('ffmpeg missing')
 
                             ff_cmd = [
-                                'ffmpeg', '-hide_banner', '-loglevel', 'info',
+                                ffmpeg_path, '-hide_banner', '-loglevel', 'info',
                                 '-fflags', 'nobuffer+flush_packets+discardcorrupt',
                                 '-flags', 'low_delay',
                                 '-avioflags', 'direct',
@@ -166,9 +202,9 @@ class FrameReceiver(threading.Thread):
                                 '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'
                             ]
                             try:
-                                ff = subprocess.Popen(ff_cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=131072)
+                                ff = subprocess.Popen(ff_cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=131072, creationflags=_SUBPROCESS_FLAGS)
                             except Exception as e:
-                                self.status_callback(f'ffmpeg start failed: {e}')
+                                self.status_callback(f'Error: FFmpeg failed. Retrying...')
                                 raise ConnectionResetError('ffmpeg failed')
 
                             # reader thread: read raw frames from ffmpeg stdout and callback
@@ -539,7 +575,7 @@ class FrameReceiver(threading.Thread):
                         pass
                     except Exception as e:
                         # Connection lost or decoding error
-                        self.status_callback(f"Connection lost: {e}")
+                        self.status_callback("Connection lost. Retrying...")
                         if self.debug_callback:
                             try:
                                 self.debug_callback(f"Exception during frame read/decode: {e}")
@@ -550,7 +586,7 @@ class FrameReceiver(threading.Thread):
                     # if a manual reconnect requested
                     if self.reconnect_event.is_set():
                         self.reconnect_event.clear()
-                        self.status_callback("Reconnecting...")
+                        self.status_callback("Connection lost. Retrying...")
                         break
 
                 # close socket and try again if not stopped
@@ -566,7 +602,7 @@ class FrameReceiver(threading.Thread):
                 # If reconnect wasn't requested, wait until reconnect_event or stop
                 if not self.reconnect_event.is_set():
                     # show device not found then wait
-                    self.status_callback("Device not Found")
+                    self.status_callback("Searching for devices...")
                     # Sleep in short increments to be responsive
                     wait_seconds = 0
                     while not (self.reconnect_event.is_set() or self.stop_event.is_set()) and wait_seconds < 5:
@@ -574,9 +610,7 @@ class FrameReceiver(threading.Thread):
                         wait_seconds += 0.1
 
             except (ConnectionRefusedError, socket.timeout) as e:
-                self.status_callback(f"Connection failed: {e}")
-                # Show device not found and wait for reconnect or stop
-                self.status_callback("Device not Found")
+                self.status_callback("Searching for devices...")
                 wait_seconds = 0
                 while not (self.reconnect_event.is_set() or self.stop_event.is_set()) and wait_seconds < 3:
                     time.sleep(0.1)
@@ -589,7 +623,7 @@ class FrameReceiver(threading.Thread):
                 self.sock = None
                 continue
             except Exception as e:
-                self.status_callback(f"Unexpected error: {e}")
+                self.status_callback("Connection lost. Retrying...")
                 try:
                     if self.sock:
                         self.sock.close()
@@ -629,9 +663,10 @@ class FrameReceiver(threading.Thread):
 
 
 class PCamClientGUI:
-    # Base long side for preview (pixels). Horizontal preview will be 16:9 (w x h),
-    # vertical preview will be 9:16 (w x h) using this long side.
-    PREVIEW_LONG = 640
+    # Fixed 16:9 preview dimensions. The preview never resizes; portrait frames
+    # are pillarboxed (black bars on the sides) inside this fixed canvas.
+    PREVIEW_W = 640
+    PREVIEW_H = 360
 
     def __init__(self, root):
         self.root = root
@@ -788,7 +823,7 @@ class PCamClientGUI:
         # preview canvas
         self.preview_label = ttk.Label(right)
         self.preview_label.pack()
-        self._set_preview_placeholder('Device not Found')
+        self._set_preview_placeholder('Searching for devices...')
 
         # reset button under preview (fixed size preview area)
         lower = ttk.Frame(right)
@@ -796,23 +831,20 @@ class PCamClientGUI:
         ttk.Button(lower, text='Reset (r)', command=self.on_reset).pack()
 
     def _set_preview_placeholder(self, text):
-        # create an image with text centered
-        w, h = self._get_preview_size()
+        # create an image with text centered at fixed 16:9 dimensions
+        w, h = self.PREVIEW_W, self.PREVIEW_H
         img = np.zeros((h, w, 3), dtype=np.uint8)
         # dark background
         img[:] = (30, 30, 30)
         # put text
         font = cv2.FONT_HERSHEY_SIMPLEX
-        scale = 1.0
+        scale = 0.7
         thickness = 2
         (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
         x = (w - tw) // 2
         y = (h + th) // 2
         cv2.putText(img, text, (x, y), font, scale, (200, 200, 200), thickness, cv2.LINE_AA)
-        # convert to PIL image
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        pil = Image.fromarray(img_rgb)
-        pil = pil.resize((w, h))
+        pil = Image.fromarray(img)
         self.photoimage = ImageTk.PhotoImage(pil)
         self.preview_label.configure(image=self.photoimage)
 
@@ -833,25 +865,11 @@ class PCamClientGUI:
         self.receiver.start()
 
     def _get_preview_size(self):
-        """Return (w, h) for the preview area based on current rotation selection.
+        """Return the fixed 16:9 preview canvas size.
 
-        If rotation is 90 or 270 we display vertically in 16:9 (width < height).
-        If rotation is 180 or 360 we display horizontally in 16:9 (width > height).
+        The preview is always 640x360. Portrait frames are pillarboxed inside it.
         """
-        try:
-            rot = int(self.rotate_var.get())
-        except Exception:
-            rot = 360
-
-        if rot in (90, 270):
-            # vertical: long side is height
-            h = self.PREVIEW_LONG
-            w = int(h * 9 / 16)
-        else:
-            # horizontal: long side is width
-            w = self.PREVIEW_LONG
-            h = int(w * 9 / 16)
-        return w, h
+        return self.PREVIEW_W, self.PREVIEW_H
 
     def _on_vcam_toggle(self):
         """Called when the user toggles the Send to virtual camera checkbox."""
@@ -962,7 +980,7 @@ class PCamClientGUI:
         # 1. Priority 1: ADB Forward
         if self._start_adb_forward():
             self.host_var.set('127.0.0.1')
-            self._on_status('Connecting via USB (ADB)...')
+            self._on_status('Connecting via USB...')
             self.start_receiver()
             return
 
@@ -970,7 +988,7 @@ class PCamClientGUI:
         if getattr(self, 'discovered_ips', None):
             ip = list(self.discovered_ips.values())[0]
             self.host_var.set(ip)
-            self._on_status('Connecting via Wi-Fi (mDNS)...')
+            self._on_status('Connecting via Wi-Fi...')
             self.start_receiver()
             return
             
@@ -996,7 +1014,7 @@ class PCamClientGUI:
                 self.discovered_ips[name] = ip
                 self._debug_log(f"mDNS Discovered: {name} at {ip}")
                 # Auto-connect if currently waiting for a device
-                if self.status_var.get() in ('Idle', 'Device not Found'):
+                if self.status_var.get() in ('Idle', 'Searching for devices...'):
                     self.connect_smartly()
             else:
                 self.discovered_ips.pop(name, None)
@@ -1051,12 +1069,22 @@ class PCamClientGUI:
         except Exception:
             frame = frame_rgb
 
-        # 2. Pre-process for preview
+        # 2. Pre-process for preview (pillarbox/letterbox into fixed 16:9 canvas)
         preview_frame_to_store = frame
         try:
-            w, h = self._get_preview_size()
-            if frame.shape[1] != w or frame.shape[0] != h:
-                preview_frame_to_store = cv2.resize(frame, (w, h))
+            canvas_w, canvas_h = self._get_preview_size()
+            fh, fw = frame.shape[:2]
+            # compute scale to fit frame inside the fixed canvas
+            scale = min(canvas_w / fw, canvas_h / fh)
+            new_w = int(fw * scale)
+            new_h = int(fh * scale)
+            resized = cv2.resize(frame, (new_w, new_h))
+            # create black canvas and center the resized frame
+            canvas = np.zeros((canvas_h, canvas_w, 3), dtype=np.uint8)
+            x_off = (canvas_w - new_w) // 2
+            y_off = (canvas_h - new_h) // 2
+            canvas[y_off:y_off + new_h, x_off:x_off + new_w] = resized
+            preview_frame_to_store = canvas
         except Exception:
             pass
 
@@ -1109,13 +1137,15 @@ class PCamClientGUI:
             if local_msg == "Connected":
                 host = self.host_var.get()
                 if host == '127.0.0.1':
-                    local_msg = "Connected via USB (ADB)"
+                    local_msg = "Connected [USB]"
                 elif hasattr(self, 'discovered_ips') and host in self.discovered_ips.values():
-                    local_msg = "Connected via Wi-Fi (mDNS)"
+                    local_msg = "Connected [Wi-Fi]"
+                else:
+                    local_msg = "Connected [Manual]"
             
             self.status_var.set(local_msg)
             # update placeholder if connection dropped or waiting
-            if any(k in local_msg.lower() for k in ('not found', 'connecting', 'lost', 'failed', 'error')):
+            if any(k in local_msg.lower() for k in ('searching', 'connecting', 'lost', 'failed', 'error', 'retrying')):
                 with getattr(self, 'frame_lock', threading.Lock()):
                     self.processed_preview_frame = None
                 self._set_preview_placeholder(local_msg)
@@ -1178,31 +1208,32 @@ class PCamClientGUI:
 
     # --- ADB forward helpers -------------------------------------------------
     def _start_adb_forward(self):
-        """Start 'adb forward tcp:8080 tcp:8080' if adb exists in PATH.
+        """Start 'adb forward tcp:8080 tcp:8080' if adb is available.
 
+        Checks bundled Binaries folder first, then system PATH.
         Sets self._adb_forwarded = True on success.
         """
-        adb_path = shutil.which('adb')
+        adb_path = get_binary_path('adb.exe' if sys.platform == 'win32' else 'adb')
         if not adb_path:
             # adb not available; nothing to do
             return False
         # run adb forward
         try:
             # use a subprocess call; do not raise on non-zero so we can report
-            res = subprocess.run([adb_path, 'forward', 'tcp:8080', 'tcp:8080'], capture_output=True, text=True)
+            res = subprocess.run([adb_path, 'forward', 'tcp:8080', 'tcp:8080'], capture_output=True, text=True, creationflags=_SUBPROCESS_FLAGS)
             if res.returncode == 0:
                 self._adb_forwarded = True
                 # also forward 8081 for control channel
-                subprocess.run([adb_path, 'forward', 'tcp:8081', 'tcp:8081'], capture_output=True, text=True)
-                self._on_status('ADB forward started')
+                subprocess.run([adb_path, 'forward', 'tcp:8081', 'tcp:8081'], capture_output=True, text=True, creationflags=_SUBPROCESS_FLAGS)
+                self._on_status('Connecting via USB...')
                 return True
             else:
                 # log failure to status
                 msg = res.stderr.strip() or res.stdout.strip()
-                self._on_status(f'ADB forward failed: {msg}')
+                self._on_status(f'Error: ADB failed. Retrying...')
                 return False
         except Exception as e:
-            self._on_status(f'ADB forward error: {e}')
+            self._on_status(f'Error: ADB failed. Retrying...')
             return False
 
     def _stop_adb_forward(self):
@@ -1212,12 +1243,12 @@ class PCamClientGUI:
         """
         if not getattr(self, '_adb_forwarded', False):
             return False
-        adb_path = shutil.which('adb')
+        adb_path = get_binary_path('adb.exe' if sys.platform == 'win32' else 'adb')
         if not adb_path:
             return False
         try:
-            res = subprocess.run([adb_path, 'forward', '--remove', 'tcp:8080'], capture_output=True, text=True)
-            subprocess.run([adb_path, 'forward', '--remove', 'tcp:8081'], capture_output=True, text=True)
+            res = subprocess.run([adb_path, 'forward', '--remove', 'tcp:8080'], capture_output=True, text=True, creationflags=_SUBPROCESS_FLAGS)
+            subprocess.run([adb_path, 'forward', '--remove', 'tcp:8081'], capture_output=True, text=True, creationflags=_SUBPROCESS_FLAGS)
             if res.returncode == 0:
                 self._adb_forwarded = False
                 self._on_status('ADB forward removed')

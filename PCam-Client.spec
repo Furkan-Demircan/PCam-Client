@@ -4,7 +4,12 @@
 a = Analysis(
     ['PCam-Client.py'],
     pathex=[],
-    binaries=[],
+    binaries=[
+        ('Binaries/ffmpeg.exe', 'Binaries'),
+        ('Binaries/adb.exe', 'Binaries'),
+        ('Binaries/AdbWinApi.dll', 'Binaries'),
+        ('Binaries/AdbWinUsbApi.dll', 'Binaries'),
+    ],
     datas=[('Images', 'Images')],
     hiddenimports=['zeroconf', 'pyvirtualcam'],
     hookspath=[],
@@ -22,7 +27,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='PCam-Client',
+    name='PCam',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
