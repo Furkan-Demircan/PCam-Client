@@ -719,9 +719,9 @@ class PCamClientGUI:
         self.vcam_fps_var = tk.IntVar(value=self.vcam_fps)
         # flag to avoid spamming source size logs
         self._source_logged = False
-        # virtual camera resolution (defaults to preview 640x360)
-        self.vcam_width_var = tk.IntVar(value=640)
-        self.vcam_height_var = tk.IntVar(value=360)
+        # virtual camera resolution (defaults to preview 1280x720)
+        self.vcam_width_var = tk.IntVar(value=1280)
+        self.vcam_height_var = tk.IntVar(value=720)
 
         # (Direct OBS virtual camera setup removed — using background vcam worker instead)
 
